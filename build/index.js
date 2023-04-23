@@ -30,7 +30,7 @@ class WebSocketClientAdapter {
             }
         };
         socket.onclose = (event) => {
-            this.network.onDisconnect(JSON.parse(event.reason));
+            this.network.onDisconnect(JSON.parse(event.reason), event);
         };
         socket.onerror = (event) => {
             this.network.onSocketError(event);

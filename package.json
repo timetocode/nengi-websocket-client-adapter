@@ -1,6 +1,6 @@
 {
   "name": "nengi-websocket-client-adapter",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Browser websocket adapter for nengi client",
   "main": "./build/index.js",
   "scripts": {
@@ -16,7 +16,7 @@
     "typescript": "^5.0.4"
   },
   "dependencies": {
-    "nengi": "^2.0.0-alpha.24",
+    "nengi": "^2.0.0-alpha.26",
     "nengi-dataviews": "^0.4.0"
   }
 }
