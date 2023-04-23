@@ -3,7 +3,7 @@ declare class WebSocketClientAdapter {
     socket: WebSocket | null;
     network: ClientNetwork;
     context: Context;
-    constructor(network: ClientNetwork);
+    constructor(network: ClientNetwork, config: any);
     flush(): void;
     setupWebsocket(socket: WebSocket): void;
     connect(wsUrl: string, handshake: any): Promise<unknown>;

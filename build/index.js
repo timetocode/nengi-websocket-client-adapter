@@ -4,7 +4,7 @@ exports.WebSocketClientAdapter = void 0;
 const nengi_1 = require("nengi");
 const nengi_dataviews_1 = require("nengi-dataviews");
 class WebSocketClientAdapter {
-    constructor(network) {
+    constructor(network, config) {
         this.socket = null;
         this.network = network;
         this.context = this.network.client.context;
@@ -29,15 +29,11 @@ class WebSocketClientAdapter {
                 this.network.readSnapshot(dr);
             }
         };
-        socket.onclose = function (event) {
-            console.log('sock closed');
-            console.log(event);
-            // TODO
+        socket.onclose = (event) => {
+            this.network.onDisconnect(JSON.parse(event.reason));
         };
-        socket.onerror = function (event) {
-            console.log('socket error');
-            console.log(event);
-            // TODO
+        socket.onerror = (event) => {
+            this.network.onSocketError(event);
         };
     }
     connect(wsUrl, handshake) {

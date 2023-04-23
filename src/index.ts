@@ -12,7 +12,7 @@ class WebSocketClientAdapter {
     network: ClientNetwork
     context: Context
 
-    constructor(network: ClientNetwork) {
+    constructor(network: ClientNetwork, config: any) {
         this.socket = null
         this.network = network
         this.context = this.network.client.context
@@ -43,16 +43,12 @@ class WebSocketClientAdapter {
             }
         }
 
-        socket.onclose = function (event) {
-            console.log('sock closed')
-            console.log(event)
-            // TODO
+        socket.onclose = (event) => {
+            this.network.onDisconnect(JSON.parse(event.reason))
         }
 
-        socket.onerror = function (event) {
-            console.log('socket error')
-            console.log(event)
-            // TODO
+        socket.onerror = (event) => {
+            this.network.onSocketError(event)
         }
     }
 
