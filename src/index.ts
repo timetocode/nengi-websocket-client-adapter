@@ -44,7 +44,7 @@ class WebSocketClientAdapter {
         }
 
         socket.onclose = (event) => {
-            this.network.onDisconnect(JSON.parse(event.reason), event)
+            this.network.onDisconnect(event.reason, event)
         }
 
         socket.onerror = (event) => {
