@@ -1,11 +1,17 @@
-import { ClientNetwork, Context } from 'nengi';
-declare class WebSocketClientAdapter {
+import { ClientNetwork } from 'nengi';
+import type { BinaryAdapter, BinaryPayload, IClientNetworkAdapter } from 'nengi';
+type WebSocketClientAdapterConfig = {
+    binary?: BinaryAdapter<BinaryPayload, ArrayBuffer>;
+};
+declare class WebSocketClientAdapter implements IClientNetworkAdapter<BinaryPayload, ArrayBuffer, string> {
     socket: WebSocket | null;
     network: ClientNetwork;
-    context: Context;
-    constructor(network: ClientNetwork, config: any);
+    binary: BinaryAdapter<BinaryPayload, ArrayBuffer>;
+    connected: boolean;
+    constructor(network: ClientNetwork, config?: WebSocketClientAdapterConfig);
     flush(): void;
-    setupWebsocket(socket: WebSocket): void;
+    disconnect(reason?: any): void;
+    private setupWebsocket;
     connect(wsUrl: string, handshake: any): Promise<unknown>;
 }
 export { WebSocketClientAdapter };

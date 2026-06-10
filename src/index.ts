@@ -1,49 +1,57 @@
 import {
-    EngineMessage,
-    BinarySection,
-    ClientNetwork,
-    Context
+    ClientNetwork
 } from 'nengi'
+import type { BinaryAdapter, BinaryPayload, IClientNetworkAdapter } from 'nengi'
 
-import { DataViewReader, DataViewWriter } from 'nengi-dataviews'
+import { dataViewBinary } from 'nengi-dataviews'
 
-class WebSocketClientAdapter {
+type WebSocketClientAdapterConfig = {
+    binary?: BinaryAdapter<BinaryPayload, ArrayBuffer>
+}
+
+class WebSocketClientAdapter implements IClientNetworkAdapter<BinaryPayload, ArrayBuffer, string> {
     socket: WebSocket | null
     network: ClientNetwork
-    context: Context
+    binary: BinaryAdapter<BinaryPayload, ArrayBuffer>
+    connected = false
 
-    constructor(network: ClientNetwork, config: any) {
+    constructor(network: ClientNetwork, config: WebSocketClientAdapterConfig = {}) {
         this.socket = null
         this.network = network
-        this.context = this.network.client.context
+        this.binary = config.binary ?? dataViewBinary
     }
 
     flush() {
         if (!this.socket) {
-            console.log('CANCELED, no socket')
             return
         }
 
         if (this.socket!.readyState !== 1) {
-            console.log('socket not open')
             return
         }
 
-        const buffer = this.network.createOutboundBuffer(DataViewWriter)
+        const buffer = this.network.createOutbound(this.binary)
         this.socket!.send(buffer)
     }
 
-    setupWebsocket(socket: WebSocket) {
+    disconnect(reason?: any) {
+        this.socket?.close(1000, typeof reason === 'string' ? reason : JSON.stringify(reason ?? 'closed'))
+        this.socket = null
+        this.connected = false
+    }
+
+    private setupWebsocket(socket: WebSocket) {
         this.socket = socket
 
         socket.onmessage = (event) => {
-            if (event.data instanceof ArrayBuffer) {
-                const dr = new DataViewReader(event.data, 0)
+            if (event.data instanceof ArrayBuffer || ArrayBuffer.isView(event.data)) {
+                const dr = this.binary.createReader(event.data)
                 this.network.readSnapshot(dr)
             }
         }
 
         socket.onclose = (event) => {
+            this.connected = false
             this.network.onDisconnect(event.reason, event)
         }
 
@@ -56,36 +64,43 @@ class WebSocketClientAdapter {
         return new Promise((resolve, reject) => {
             const socket = new WebSocket(wsUrl)
             socket.binaryType = 'arraybuffer'
+            let settled = false
 
             socket.onopen = (event) => {
-                socket.send(this.network.createHandshakeBuffer(handshake, DataViewWriter))
+                socket.send(this.network.createHandshake(handshake, this.binary))
             }
 
-            socket.onclose = function (event) {
-                reject(event)
+            socket.onclose = (event) => {
+                if (!settled) {
+                    settled = true
+                    reject(event)
+                    return
+                }
+                this.connected = false
+                this.network.onDisconnect(event.reason, event)
             }
 
-            socket.onerror = function (event) {
-                reject(event)
+            socket.onerror = (event) => {
+                this.network.onSocketError(event)
+                if (!settled) {
+                    settled = true
+                    reject(event)
+                }
             }
 
             socket.onmessage = (event) => {
                 // initially the only thing we care to read is a response to our handshake
                 // we don't even setup the parser for the rest of what a nengi client can receive
-                const dr = new DataViewReader(event.data, 0)
-                const type = dr.readUInt8() // type of message
-                if (type === BinarySection.EngineMessages) {
-                    const count = dr.readUInt8() // quantity of engine messages
-                    const connectionResponseByte = dr.readUInt8()
-                    if (connectionResponseByte === EngineMessage.ConnectionAccepted) {
-                        // setup listeners for normal game data
-                        this.setupWebsocket(socket)
-                        resolve('accepted')
-                    }
-                    if (connectionResponseByte === EngineMessage.ConnectionDenied) {
-                        const denyReason = JSON.parse(dr.readString())
-                        reject(denyReason)
-                    }
+                const result = this.network.readHandshakeResponse(this.binary.createReader(event.data))
+                if (result.accepted) {
+                    // setup listeners for normal game data
+                    settled = true
+                    this.connected = true
+                    this.setupWebsocket(socket)
+                    resolve(result)
+                } else {
+                    settled = true
+                    reject(result.reason)
                 }
             }
         })
