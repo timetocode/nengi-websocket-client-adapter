@@ -1,7 +1,4 @@
-import {
-    ClientNetwork
-} from 'nengi'
-import type { BinaryAdapter, BinaryPayload, IClientNetworkAdapter } from 'nengi'
+import type { BinaryAdapter, BinaryPayload, ClientNetwork, IClientNetworkAdapter } from 'nengi'
 
 import { dataViewBinary } from 'nengi-dataviews'
 
@@ -100,6 +97,7 @@ class WebSocketClientAdapter implements IClientNetworkAdapter<BinaryPayload, Arr
                     resolve(result)
                 } else {
                     settled = true
+                    socket.close(1000, typeof result.reason === 'string' ? result.reason : JSON.stringify(result.reason ?? 'closed'))
                     reject(result.reason)
                 }
             }

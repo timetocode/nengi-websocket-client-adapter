@@ -67,6 +67,7 @@ class WebSocketClientAdapter {
                 }
             };
             socket.onmessage = (event) => {
+                var _a;
                 // initially the only thing we care to read is a response to our handshake
                 // we don't even setup the parser for the rest of what a nengi client can receive
                 const result = this.network.readHandshakeResponse(this.binary.createReader(event.data));
@@ -79,6 +80,7 @@ class WebSocketClientAdapter {
                 }
                 else {
                     settled = true;
+                    socket.close(1000, typeof result.reason === 'string' ? result.reason : JSON.stringify((_a = result.reason) !== null && _a !== void 0 ? _a : 'closed'));
                     reject(result.reason);
                 }
             };

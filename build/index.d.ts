@@ -1,5 +1,4 @@
-import { ClientNetwork } from 'nengi';
-import type { BinaryAdapter, BinaryPayload, IClientNetworkAdapter } from 'nengi';
+import type { BinaryAdapter, BinaryPayload, ClientNetwork, IClientNetworkAdapter } from 'nengi';
 type WebSocketClientAdapterConfig = {
     binary?: BinaryAdapter<BinaryPayload, ArrayBuffer>;
 };
