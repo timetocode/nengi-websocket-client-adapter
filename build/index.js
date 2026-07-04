@@ -42,7 +42,7 @@ class WebSocketClientAdapter {
             this.network.onSocketError(event);
         };
     }
-    connect(wsUrl, handshake) {
+    connect(wsUrl, handshake = {}) {
         return new Promise((resolve, reject) => {
             const socket = new WebSocket(wsUrl);
             socket.binaryType = 'arraybuffer';

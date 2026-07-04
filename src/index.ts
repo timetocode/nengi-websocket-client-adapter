@@ -57,7 +57,7 @@ class WebSocketClientAdapter implements IClientNetworkAdapter<BinaryPayload, Arr
         }
     }
 
-    connect(wsUrl: string, handshake: any) {
+    connect(wsUrl: string, handshake: any = {}) {
         return new Promise((resolve, reject) => {
             const socket = new WebSocket(wsUrl)
             socket.binaryType = 'arraybuffer'

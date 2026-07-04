@@ -11,6 +11,6 @@ declare class WebSocketClientAdapter implements IClientNetworkAdapter<BinaryPayl
     flush(): void;
     disconnect(reason?: any): void;
     private setupWebsocket;
-    connect(wsUrl: string, handshake: any): Promise<unknown>;
+    connect(wsUrl: string, handshake?: any): Promise<unknown>;
 }
 export { WebSocketClientAdapter };
