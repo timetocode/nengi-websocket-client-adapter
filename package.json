@@ -1,6 +1,6 @@
 {
   "name": "nengi-websocket-client-adapter",
-  "version": "2.0.0-rc.124",
+  "version": "2.0.0-rc.125",
   "description": "Browser websocket adapter for nengi client",
   "main": "./build/index.js",
   "types": "./build/index.d.ts",
@@ -18,21 +18,31 @@
   ],
   "scripts": {
     "test": "jest --passWithNoTests",
-    "build": "tsc"
+    "clean": "node -e \"require('fs').rmSync('build', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
+    "prepack": "npm run build"
   },
   "author": "Alex // timetocode",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/timetocode/nengi-websocket-client-adapter.git"
+  },
+  "homepage": "https://github.com/timetocode/nengi-websocket-client-adapter#readme",
+  "bugs": {
+    "url": "https://github.com/timetocode/nengi-websocket-client-adapter/issues"
+  },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "jest": "^29.7.0",
-    "nengi": "2.0.0-rc.124",
+    "nengi": "2.0.0-rc.125",
     "ts-jest": "^29.4.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "nengi-dataviews": "2.0.0-rc.124"
+    "nengi-dataviews": "2.0.0-rc.125"
   },
   "peerDependencies": {
-    "nengi": "2.0.0-rc.124"
+    "nengi": "2.0.0-rc.125"
   }
 }
