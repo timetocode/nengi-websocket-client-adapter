@@ -6,9 +6,9 @@ backend.
 Keep the complete Nengi package family on one exact version:
 
 ```sh
-npm install nengi@2.0.0-rc.126 \
-    nengi-websocket-client-adapter@2.0.0-rc.126 \
-    nengi-dataviews@2.0.0-rc.126
+npm install nengi@2.0.0-rc.127 \
+    nengi-websocket-client-adapter@2.0.0-rc.127 \
+    nengi-dataviews@2.0.0-rc.127
 ```
 
 ```ts
