@@ -12,140 +12,113 @@ const liveTimers = {
     }
 };
 class WebSocketClientAdapter {
-    constructor(network, config = {}) {
+    constructor(config = {}) {
         var _a;
-        this.connected = false;
+        this.clientAdapterVersion = 2;
         this.socket = null;
-        this.network = network;
+        this.handlers = null;
         this.binary = (_a = config.binary) !== null && _a !== void 0 ? _a : nengi_dataviews_1.dataViewBinary;
     }
-    flush() {
-        if (!this.socket) {
-            return;
-        }
-        if (this.socket.readyState !== 1) {
-            return;
-        }
-        const buffer = this.network.createOutbound(this.binary);
-        this.socket.send(buffer);
-    }
-    flushPongs() {
-        const socket = this.socket;
-        if (!socket || socket.readyState !== WebSocket.OPEN || !this.connected) {
-            return;
-        }
-        try {
-            this.network.flushPongs(this.binary, payload => socket.send(payload));
-        }
-        catch (error) {
-            this.network.onSocketError(error);
-        }
-    }
-    disconnect(reason) {
-        var _a;
-        (_a = this.socket) === null || _a === void 0 ? void 0 : _a.close(1000, typeof reason === 'string' ? reason : JSON.stringify(reason !== null && reason !== void 0 ? reason : 'closed'));
-        this.socket = null;
-        this.connected = false;
-    }
-    setupWebsocket(socket) {
+    open(url, handlers) {
+        const socket = new WebSocket(url);
+        socket.binaryType = 'arraybuffer';
         this.socket = socket;
-        socket.onmessage = (event) => {
-            if (event.data instanceof ArrayBuffer || ArrayBuffer.isView(event.data)) {
-                const dr = this.binary.createReader(event.data);
-                this.network.readSnapshot(dr);
+        this.handlers = handlers;
+        socket.onopen = () => {
+            if (this.socket === socket)
+                handlers.onOpen();
+        };
+        socket.onmessage = event => {
+            if (this.socket !== socket)
+                return;
+            if (!(event.data instanceof ArrayBuffer) && !ArrayBuffer.isView(event.data)) {
+                handlers.onError(new Error('The nengi transport requires binary messages.'));
+                return;
+            }
+            const deliver = (payload) => {
+                if (this.socket === socket)
+                    handlers.onMessage(payload);
+            };
+            if (this.link)
+                this.link.sendServerToClient(event.data, deliver);
+            else
+                deliver(event.data);
+        };
+        socket.onclose = event => {
+            var _a;
+            if (this.socket !== socket)
+                return;
+            this.detach(socket);
+            this.socket = null;
+            this.handlers = null;
+            (_a = this.link) === null || _a === void 0 ? void 0 : _a.clear();
+            handlers.onClose({ code: event.code, reason: event.reason, wasClean: event.wasClean });
+        };
+        socket.onerror = cause => {
+            if (this.socket === socket)
+                handlers.onError(cause);
+        };
+    }
+    send(payload) {
+        const socket = this.socket;
+        const handlers = this.handlers;
+        // The pending close event owns the reason; a late flush must not replace it.
+        if (socket && (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED))
+            return;
+        if (!socket || socket.readyState !== WebSocket.OPEN)
+            throw new Error('The WebSocket transport is not open.');
+        const deliver = (message) => {
+            if (this.socket !== socket)
+                return;
+            try {
+                if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED)
+                    return;
+                if (socket.readyState !== WebSocket.OPEN)
+                    throw new Error('The WebSocket transport is not open.');
+                socket.send(message);
+            }
+            catch (cause) {
+                handlers === null || handlers === void 0 ? void 0 : handlers.onError(cause);
             }
         };
-        socket.onclose = (event) => {
-            this.connected = false;
-            this.network.onDisconnect(event.reason, event);
-        };
-        socket.onerror = (event) => {
-            this.network.onSocketError(event);
-        };
+        if (this.link)
+            this.link.sendClientToServer(payload, deliver);
+        else
+            deliver(payload);
     }
-    connect(wsUrl, handshake = {}) {
-        return new Promise((resolve, reject) => {
-            const socket = new WebSocket(wsUrl);
-            socket.binaryType = 'arraybuffer';
-            let settled = false;
-            socket.onopen = (event) => {
-                socket.send(this.network.createHandshake(handshake, this.binary));
-            };
-            socket.onclose = (event) => {
-                if (!settled) {
-                    settled = true;
-                    reject(event);
-                    return;
-                }
-                this.connected = false;
-                this.network.onDisconnect(event.reason, event);
-            };
-            socket.onerror = (event) => {
-                this.network.onSocketError(event);
-                if (!settled) {
-                    settled = true;
-                    reject(event);
-                }
-            };
-            socket.onmessage = (event) => {
-                var _a;
-                // initially the only thing we care to read is a response to our handshake
-                // we don't even setup the parser for the rest of what a nengi client can receive
-                const result = this.network.readHandshakeResponse(this.binary.createReader(event.data));
-                if (result.accepted) {
-                    // setup listeners for normal game data
-                    settled = true;
-                    this.connected = true;
-                    this.setupWebsocket(socket);
-                    resolve(result);
-                }
-                else {
-                    settled = true;
-                    socket.close(1000, typeof result.reason === 'string' ? result.reason : JSON.stringify((_a = result.reason) !== null && _a !== void 0 ? _a : 'closed'));
-                    reject(result.reason);
-                }
-            };
-        });
+    close(reason) {
+        var _a;
+        const socket = this.socket;
+        this.socket = null;
+        this.handlers = null;
+        (_a = this.link) === null || _a === void 0 ? void 0 : _a.clear();
+        if (!socket)
+            return;
+        this.detach(socket);
+        // Browsers cannot force termination. Logical teardown is already done;
+        // detach before a best-effort close, including during CONNECTING.
+        try {
+            socket.close(1000, reason);
+        }
+        catch (_b) {
+            socket.close();
+        }
+    }
+    detach(socket) {
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onclose = null;
+        socket.onerror = null;
     }
 }
 exports.WebSocketClientAdapter = WebSocketClientAdapter;
-class SimulatedWebSocketClientAdapter {
-    constructor(network, config) {
-        var _a;
-        this.socket = null;
-        this.connected = false;
-        if (!(config === null || config === void 0 ? void 0 : config.conditions)) {
+class SimulatedWebSocketClientAdapter extends WebSocketClientAdapter {
+    constructor(config) {
+        super(config);
+        if (!(config === null || config === void 0 ? void 0 : config.conditions))
             throw new Error('SimulatedWebSocketClientAdapter requires config.conditions.');
-        }
-        this.network = network;
-        this.binary = (_a = config.binary) !== null && _a !== void 0 ? _a : nengi_dataviews_1.dataViewBinary;
-        this.conditions = new nengi_1.NetworkConditionLink(config.conditions, {
-            timers: liveTimers
-        });
-    }
-    flush() {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.connected) {
-            return;
-        }
-        this.send(this.network.createOutbound(this.binary));
-    }
-    flushPongs() {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.connected) {
-            return;
-        }
-        try {
-            this.network.flushPongs(this.binary, payload => this.send(payload));
-        }
-        catch (error) {
-            this.network.onSocketError(error);
-        }
-    }
-    disconnect(reason) {
-        var _a;
-        this.conditions.clear();
-        (_a = this.socket) === null || _a === void 0 ? void 0 : _a.close(1000, closeReason(reason));
-        this.socket = null;
-        this.connected = false;
+        this.conditions = new nengi_1.NetworkConditionLink(config.conditions, { timers: liveTimers });
+        this.link = this.conditions;
     }
     configureNetworkConditions(conditions) {
         this.conditions.configure(conditions);
@@ -153,81 +126,5 @@ class SimulatedWebSocketClientAdapter {
     getNetworkConditionStatus() {
         return this.conditions.status();
     }
-    connect(wsUrl, handshake = {}) {
-        return new Promise((resolve, reject) => {
-            const socket = new WebSocket(wsUrl);
-            socket.binaryType = 'arraybuffer';
-            this.socket = socket;
-            let settled = false;
-            socket.onopen = () => {
-                this.send(this.network.createHandshake(handshake, this.binary));
-            };
-            socket.onclose = event => {
-                const wasConnected = this.connected;
-                this.conditions.clear();
-                this.socket = null;
-                this.connected = false;
-                if (!settled) {
-                    settled = true;
-                    reject(event);
-                    return;
-                }
-                if (wasConnected) {
-                    this.network.onDisconnect(event.reason, event);
-                }
-            };
-            socket.onerror = event => {
-                this.network.onSocketError(event);
-                if (!settled) {
-                    settled = true;
-                    reject(event);
-                    this.conditions.clear();
-                    socket.close();
-                }
-            };
-            socket.onmessage = event => {
-                if (!(event.data instanceof ArrayBuffer) && !ArrayBuffer.isView(event.data)) {
-                    return;
-                }
-                this.conditions.sendServerToClient(event.data, payload => {
-                    if (socket !== this.socket || socket.readyState !== WebSocket.OPEN) {
-                        return;
-                    }
-                    if (settled && !this.connected) {
-                        return;
-                    }
-                    if (!this.connected) {
-                        const result = this.network.readHandshakeResponse(this.binary.createReader(payload));
-                        if (result.accepted) {
-                            settled = true;
-                            this.connected = true;
-                            resolve(result);
-                        }
-                        else {
-                            settled = true;
-                            socket.close(1000, closeReason(result.reason));
-                            reject(result.reason);
-                        }
-                        return;
-                    }
-                    this.network.readSnapshot(this.binary.createReader(payload));
-                });
-            };
-        });
-    }
-    send(buffer) {
-        const socket = this.socket;
-        if (!socket) {
-            return;
-        }
-        this.conditions.sendClientToServer(buffer, payload => {
-            if (socket === this.socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(payload);
-            }
-        });
-    }
 }
 exports.SimulatedWebSocketClientAdapter = SimulatedWebSocketClientAdapter;
-function closeReason(reason) {
-    return typeof reason === 'string' ? reason : JSON.stringify(reason !== null && reason !== void 0 ? reason : 'closed');
-}

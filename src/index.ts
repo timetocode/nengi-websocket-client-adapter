@@ -1,15 +1,12 @@
-import {
-    NetworkConditionLink
-} from 'nengi'
+import { NetworkConditionLink } from 'nengi'
 import type {
     BinaryAdapter,
     BinaryPayload,
-    ClientNetwork,
+    ClientTransportHandlers,
     IClientNetworkAdapter,
     NetworkConditions,
     NetworkConditionStatus
 } from 'nengi'
-
 import { dataViewBinary } from 'nengi-dataviews'
 
 export type WebSocketClientAdapterConfig = {
@@ -30,157 +27,101 @@ const liveTimers = {
 }
 
 class WebSocketClientAdapter implements IClientNetworkAdapter<BinaryPayload, ArrayBuffer, string> {
-    socket: WebSocket | null
-    network: ClientNetwork
+    readonly clientAdapterVersion = 2 as const
+    socket: WebSocket | null = null
     binary: BinaryAdapter<BinaryPayload, ArrayBuffer>
-    connected = false
+    protected link?: NetworkConditionLink
+    private handlers: ClientTransportHandlers<BinaryPayload> | null = null
 
-    constructor(network: ClientNetwork, config: WebSocketClientAdapterConfig = {}) {
-        this.socket = null
-        this.network = network
+    constructor(config: WebSocketClientAdapterConfig = {}) {
         this.binary = config.binary ?? dataViewBinary
     }
 
-    flush() {
-        if (!this.socket) {
-            return
-        }
-
-        if (this.socket!.readyState !== 1) {
-            return
-        }
-
-        const buffer = this.network.createOutbound(this.binary)
-        this.socket!.send(buffer)
-    }
-
-    flushPongs() {
-        const socket = this.socket
-        if (!socket || socket.readyState !== WebSocket.OPEN || !this.connected) {
-            return
-        }
-        try {
-            this.network.flushPongs(this.binary, payload => socket.send(payload))
-        } catch (error) {
-            this.network.onSocketError(error)
-        }
-    }
-
-    disconnect(reason?: any) {
-        this.socket?.close(1000, typeof reason === 'string' ? reason : JSON.stringify(reason ?? 'closed'))
-        this.socket = null
-        this.connected = false
-    }
-
-    private setupWebsocket(socket: WebSocket) {
+    open(url: string, handlers: ClientTransportHandlers<BinaryPayload>) {
+        const socket = new WebSocket(url)
+        socket.binaryType = 'arraybuffer'
         this.socket = socket
-
-        socket.onmessage = (event) => {
-            if (event.data instanceof ArrayBuffer || ArrayBuffer.isView(event.data)) {
-                const dr = this.binary.createReader(event.data)
-                this.network.readSnapshot(dr)
+        this.handlers = handlers
+        socket.onopen = () => {
+            if (this.socket === socket) handlers.onOpen()
+        }
+        socket.onmessage = event => {
+            if (this.socket !== socket) return
+            if (!(event.data instanceof ArrayBuffer) && !ArrayBuffer.isView(event.data)) {
+                handlers.onError(new Error('The nengi transport requires binary messages.'))
+                return
             }
+            const deliver = (payload: BinaryPayload) => {
+                if (this.socket === socket) handlers.onMessage(payload)
+            }
+            if (this.link) this.link.sendServerToClient(event.data, deliver)
+            else deliver(event.data)
         }
-
-        socket.onclose = (event) => {
-            this.connected = false
-            this.network.onDisconnect(event.reason, event)
+        socket.onclose = event => {
+            if (this.socket !== socket) return
+            this.detach(socket)
+            this.socket = null
+            this.handlers = null
+            this.link?.clear()
+            handlers.onClose({ code: event.code, reason: event.reason, wasClean: event.wasClean })
         }
-
-        socket.onerror = (event) => {
-            this.network.onSocketError(event)
+        socket.onerror = cause => {
+            if (this.socket === socket) handlers.onError(cause)
         }
     }
 
-    connect(wsUrl: string, handshake: any = {}) {
-        return new Promise((resolve, reject) => {
-            const socket = new WebSocket(wsUrl)
-            socket.binaryType = 'arraybuffer'
-            let settled = false
-
-            socket.onopen = (event) => {
-                socket.send(this.network.createHandshake(handshake, this.binary))
+    send(payload: ArrayBuffer) {
+        const socket = this.socket
+        const handlers = this.handlers
+        // The pending close event owns the reason; a late flush must not replace it.
+        if (socket && (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED)) return
+        if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error('The WebSocket transport is not open.')
+        const deliver = (message: ArrayBuffer) => {
+            if (this.socket !== socket) return
+            try {
+                if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) return
+                if (socket.readyState !== WebSocket.OPEN) throw new Error('The WebSocket transport is not open.')
+                socket.send(message)
+            } catch (cause) {
+                handlers?.onError(cause)
             }
+        }
+        if (this.link) this.link.sendClientToServer(payload, deliver)
+        else deliver(payload)
+    }
 
-            socket.onclose = (event) => {
-                if (!settled) {
-                    settled = true
-                    reject(event)
-                    return
-                }
-                this.connected = false
-                this.network.onDisconnect(event.reason, event)
-            }
+    close(reason: string) {
+        const socket = this.socket
+        this.socket = null
+        this.handlers = null
+        this.link?.clear()
+        if (!socket) return
+        this.detach(socket)
+        // Browsers cannot force termination. Logical teardown is already done;
+        // detach before a best-effort close, including during CONNECTING.
+        try {
+            socket.close(1000, reason)
+        } catch {
+            socket.close()
+        }
+    }
 
-            socket.onerror = (event) => {
-                this.network.onSocketError(event)
-                if (!settled) {
-                    settled = true
-                    reject(event)
-                }
-            }
-
-            socket.onmessage = (event) => {
-                // initially the only thing we care to read is a response to our handshake
-                // we don't even setup the parser for the rest of what a nengi client can receive
-                const result = this.network.readHandshakeResponse(this.binary.createReader(event.data))
-                if (result.accepted) {
-                    // setup listeners for normal game data
-                    settled = true
-                    this.connected = true
-                    this.setupWebsocket(socket)
-                    resolve(result)
-                } else {
-                    settled = true
-                    socket.close(1000, typeof result.reason === 'string' ? result.reason : JSON.stringify(result.reason ?? 'closed'))
-                    reject(result.reason)
-                }
-            }
-        })
+    private detach(socket: WebSocket) {
+        socket.onopen = null
+        socket.onmessage = null
+        socket.onclose = null
+        socket.onerror = null
     }
 }
 
-class SimulatedWebSocketClientAdapter implements IClientNetworkAdapter<BinaryPayload, ArrayBuffer, string> {
-    socket: WebSocket | null = null
-    network: ClientNetwork
-    binary: BinaryAdapter<BinaryPayload, ArrayBuffer>
-    connected = false
+class SimulatedWebSocketClientAdapter extends WebSocketClientAdapter {
     readonly conditions: NetworkConditionLink
 
-    constructor(network: ClientNetwork, config: SimulatedWebSocketClientAdapterConfig) {
-        if (!config?.conditions) {
-            throw new Error('SimulatedWebSocketClientAdapter requires config.conditions.')
-        }
-        this.network = network
-        this.binary = config.binary ?? dataViewBinary
-        this.conditions = new NetworkConditionLink(config.conditions, {
-            timers: liveTimers
-        })
-    }
-
-    flush() {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.connected) {
-            return
-        }
-        this.send(this.network.createOutbound(this.binary))
-    }
-
-    flushPongs() {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.connected) {
-            return
-        }
-        try {
-            this.network.flushPongs(this.binary, payload => this.send(payload))
-        } catch (error) {
-            this.network.onSocketError(error)
-        }
-    }
-
-    disconnect(reason?: any) {
-        this.conditions.clear()
-        this.socket?.close(1000, closeReason(reason))
-        this.socket = null
-        this.connected = false
+    constructor(config: SimulatedWebSocketClientAdapterConfig) {
+        super(config)
+        if (!config?.conditions) throw new Error('SimulatedWebSocketClientAdapter requires config.conditions.')
+        this.conditions = new NetworkConditionLink(config.conditions, { timers: liveTimers })
+        this.link = this.conditions
     }
 
     configureNetworkConditions(conditions: NetworkConditions) {
@@ -190,88 +131,6 @@ class SimulatedWebSocketClientAdapter implements IClientNetworkAdapter<BinaryPay
     getNetworkConditionStatus(): NetworkConditionStatus {
         return this.conditions.status()
     }
-
-    connect(wsUrl: string, handshake: any = {}) {
-        return new Promise((resolve, reject) => {
-            const socket = new WebSocket(wsUrl)
-            socket.binaryType = 'arraybuffer'
-            this.socket = socket
-            let settled = false
-
-            socket.onopen = () => {
-                this.send(this.network.createHandshake(handshake, this.binary))
-            }
-
-            socket.onclose = event => {
-                const wasConnected = this.connected
-                this.conditions.clear()
-                this.socket = null
-                this.connected = false
-                if (!settled) {
-                    settled = true
-                    reject(event)
-                    return
-                }
-                if (wasConnected) {
-                    this.network.onDisconnect(event.reason, event)
-                }
-            }
-
-            socket.onerror = event => {
-                this.network.onSocketError(event)
-                if (!settled) {
-                    settled = true
-                    reject(event)
-                    this.conditions.clear()
-                    socket.close()
-                }
-            }
-
-            socket.onmessage = event => {
-                if (!(event.data instanceof ArrayBuffer) && !ArrayBuffer.isView(event.data)) {
-                    return
-                }
-                this.conditions.sendServerToClient(event.data, payload => {
-                    if (socket !== this.socket || socket.readyState !== WebSocket.OPEN) {
-                        return
-                    }
-                    if (settled && !this.connected) {
-                        return
-                    }
-                    if (!this.connected) {
-                        const result = this.network.readHandshakeResponse(this.binary.createReader(payload))
-                        if (result.accepted) {
-                            settled = true
-                            this.connected = true
-                            resolve(result)
-                        } else {
-                            settled = true
-                            socket.close(1000, closeReason(result.reason))
-                            reject(result.reason)
-                        }
-                        return
-                    }
-                    this.network.readSnapshot(this.binary.createReader(payload))
-                })
-            }
-        })
-    }
-
-    private send(buffer: ArrayBuffer) {
-        const socket = this.socket
-        if (!socket) {
-            return
-        }
-        this.conditions.sendClientToServer(buffer, payload => {
-            if (socket === this.socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(payload)
-            }
-        })
-    }
-}
-
-function closeReason(reason?: any) {
-    return typeof reason === 'string' ? reason : JSON.stringify(reason ?? 'closed')
 }
 
 export { WebSocketClientAdapter, SimulatedWebSocketClientAdapter }
